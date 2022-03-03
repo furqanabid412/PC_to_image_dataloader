@@ -42,11 +42,17 @@ class SemanticKitti(Dataset):
     self.learning_map = learning_map
     self.learning_map_inv = learning_map_inv
     self.sensor = sensor
+
+    # Spherical projection
     self.sensor_img_H = sensor["img_prop"]["height"]
     self.sensor_img_W = sensor["img_prop"]["width"]
-
     self.img_means = torch.tensor(sensor["img_means"])
     self.img_stds = torch.tensor(sensor["img_stds"])
+
+    # camera image
+    self.nfeatures = 10
+    self.img_h = 376
+    self.img_w = 1241
 
 
     self.class_content = class_content
@@ -307,7 +313,10 @@ class SemanticKitti(Dataset):
 
   def __getitem__(self, index):
 
+    self.timeframe = 2
     seq, frame = self.get_seq_and_frame(index)
+
+
 
     # scan_paths=[]
     # label_paths=[]
@@ -317,204 +326,80 @@ class SemanticKitti(Dataset):
 
     pose0 = self.poses[seq][frame]
 
-
-    # addded part (only for testing)
-    self.scan.open_scan(self.scan_files[seq][frame], self.label_files[seq][frame], pose0, pose0, ego_motion=False)
-
-    image = np.array(self.scan.loadImage(self.image_files[seq][frame]))
-
-    pointcloud=np.hstack((self.scan.point,np.expand_dims(self.scan.remission,1)))
-    sem_label = self.map(np.copy(self.scan.label), self.learning_map)
-    sem_label =np.squeeze(sem_label, axis=1)
-
-    proj_matrix=self.proj_matrix[seq]
-    mapped_pointcloud, keep_mask = self.scan.mapLidar2Camera(proj_matrix,pointcloud[:, :3], image.shape[1], image.shape[0])
-
-    y_data = mapped_pointcloud[:, 1].astype(np.int32)
-    x_data = mapped_pointcloud[:, 0].astype(np.int32)
-
-    combined = np.vstack((y_data,x_data))
-
-    ind= np.unique(combined,axis=1,return_index=True,return_counts=True,return_inverse=False)
-
-    counts=ind[2]
-    counts =counts[counts>1]
-
-
-    image = image.astype(np.float32) / 255.0
-    # compute image view pointcloud feature
-    depth = np.linalg.norm(pointcloud[:, :3], 2, axis=1)
-    keep_poincloud = pointcloud[keep_mask]
-    proj_xyzi = np.zeros(
-      (image.shape[0], image.shape[1], keep_poincloud.shape[1]), dtype=np.float32)
-    proj_xyzi[x_data, y_data] = keep_poincloud
-    proj_depth = np.zeros(
-      (image.shape[0], image.shape[1]), dtype=np.float32)
-    proj_depth[x_data, y_data] = depth[keep_mask]
-
-    proj_label = np.zeros((image.shape[0], image.shape[1]), dtype=np.int32)
-
-    proj_label[x_data, y_data] = sem_label[keep_mask]
-
-    # plt.imshow(proj_depth,cmap="magma")
-
-    proj_label=self.map(proj_label,self.learning_map_inv)
-    image = np.array([[self.color_map[val] for val in row] for row in proj_label], dtype='B')
-
-    plt.imshow(image)
-    plt.show()
-
-
-
-    if self.timeframe > 1 :
-      proj_multi_temporal_scan = []
-      # comment 1 - for future use : we don;t need multi-temporal label(just we require single/multi range label) now
-      # proj_multi_temporal_label = []
-
-
-    for timeframe in range(self.timeframe):
-      if frame - timeframe >= 0:
-        curr_frame = frame - timeframe
-      else:
-        curr_frame = 0
-      temp_scan_path = self.scan_files[seq][curr_frame]
-      if self.train == 'train' :
-        temp_label_path = self.label_files[seq][curr_frame]
-      else:
-        temp_label_path =[]
-
-      curr_pose = self.poses[seq][curr_frame]
-
-      # check whether a coordinate transformation is needed or not
-
-      if timeframe == 0 or np.array_equal(pose0, curr_pose):
-        ego_motion = False
-      else:
-        ego_motion = True
-
-      # opening the scan(and label) file
-      self.scan.open_scan(temp_scan_path,temp_label_path, pose0, curr_pose, ego_motion=ego_motion)
-
-      if self.timeframe > 1:
-        if self.do_multi:
-          multi_proj_scan = np.copy(self.scan.concated_proj_range)
-          proj_multi_temporal_scan.append(multi_proj_scan)
-
-          # comment 2-1 - for future use : we don;t need multi-temporal label(just we require single/multi range label) now
-          '''
-          if self.train == 'train':
-            multi_proj_label = np.copy(self.scan.concated_proj_semlabel)
-            proj_multi_temporal_label.append(multi_proj_label)
-          '''
-
-          if timeframe == 0:
-            # other params for post processing - only for frame "t"
-            # proj_single_scan, proj_single_label = self.get_pixel_features()
-            scan_points, scan_range, scan_remission, pixel_u, pixel_v, scan_labels = self.get_point_features()
-            if self.train == 'train':
-              proj_label = np.copy(self.scan.concated_proj_semlabel)
-              proj_label = torch.from_numpy(proj_label)
-
-        else:
-          proj_single_scan, proj_single_label = self.get_pixel_features()
-          proj_multi_temporal_scan.append(np.copy(proj_single_scan))
-
-          if timeframe == 0:
-            scan_points, scan_range, scan_remission, pixel_u, pixel_v, scan_labels = self.get_point_features()
-            if self.train == 'train':
-              proj_label = np.copy(proj_single_label)
-              proj_label = torch.from_numpy(proj_label)
-
-          # comment 2-2 - for future use : we don;t need multi-temporal label(just we require single/multi range label) now
-          '''  
-          if self.train == 'train':
-            proj_multi_temporal_label.append(np.copy(proj_single_label))
-          '''
-      else:
-        if self.do_multi:
-          multi_proj_scan = np.copy(self.scan.concated_proj_range)
-          if self.train == 'train':
-            multi_proj_label = np.copy(self.scan.concated_proj_semlabel)
-          scan_points, scan_range, scan_remission, pixel_u, pixel_v, scan_labels = self.get_point_features()
-        else:
-          proj_single_scan, proj_single_label = self.get_pixel_features()
-          scan_points, scan_range, scan_remission, pixel_u, pixel_v, scan_labels = self.get_point_features()
-
-
-
     if self.timeframe > 1:
-      proj_multi_temporal_scan = torch.tensor(np.copy(proj_multi_temporal_scan))
+      temporal_proj_tensor = torch.zeros(self.timeframe,self.nfeatures,self.img_h,self.img_w)
+      temporal_proj_label = torch.zeros(self.timeframe, self.img_h, self.img_w)
 
-      # comment 3 - for future use : we don;t need multi-temporal label(just we require single/multi range label) now
-      '''
-      if self.train =='train':
-        proj_multi_temporal_label = self.map(np.copy(proj_multi_temporal_label),self.learning_map)
-        proj_multi_temporal_label = torch.tensor(proj_multi_temporal_label)
-      else:
-        proj_multi_temporal_label = torch.tensor([])
-      '''
+      for timeframe in range(self.timeframe):
 
-      if self.train == 'train':
-        return {"proj_multi_temporal_scan": proj_multi_temporal_scan,
-                "proj_multi_temporal_label": proj_label}
-
-      else :
-        return {"proj_multi_temporal_scan": proj_multi_temporal_scan,
-                "proj_multi_temporal_label": proj_label,
-                'scan_points': scan_points,
-                'scan_range': scan_range,
-                'scan_remission': scan_remission,
-                'scan_labels': scan_labels,
-                'pixel_u': pixel_u,
-                'pixel_v': pixel_v}
-
-    else:
-      if self.do_multi:
-        if  self.train == 'train':
-          return {"proj_multi_range_only_scan": torch.tensor(multi_proj_scan),
-                  "proj_multi_range_only_label": torch.tensor(multi_proj_label)}
+        if frame - timeframe >= 0:
+          curr_frame = frame - timeframe
         else:
-          return {"proj_multi_range_only_scan": multi_proj_scan,
-                  "proj_multi_range_only_label": multi_proj_label,
-                  'scan_points': scan_points,
-                  'scan_range': scan_range,
-                  'scan_remission': scan_remission,
-                  'scan_labels': scan_labels,
-                  'pixel_u': pixel_u,
-                  'pixel_v': pixel_v}
-
-      else:
+          curr_frame = 0
+        temp_scan_path = self.scan_files[seq][curr_frame]
         if self.train == 'train':
-          return {"proj_scan_only": proj_single_scan,
-                  "proj_label_only": proj_single_label,
-                  'scan_points': scan_points,
-                  'scan_range': scan_range,
-                  'scan_remission': scan_remission,
-                  'scan_labels': scan_labels,
-                  'pixel_u': pixel_u,
-                  'pixel_v': pixel_v}
+          temp_label_path = self.label_files[seq][curr_frame]
         else:
-          return {"proj_scan_only": proj_single_scan,
-                  "proj_label_only": proj_single_label,
-                  'scan_points': scan_points,
-                  'scan_range': scan_range,
-                  'scan_remission': scan_remission,
-                  'scan_labels': scan_labels,
-                  'pixel_u': pixel_u,
-                  'pixel_v': pixel_v}
+          temp_label_path = []
+
+        curr_pose = self.poses[seq][curr_frame]
+
+        # check whether a coordinate transformation is needed or not
+
+        if timeframe == 0 or np.array_equal(pose0, curr_pose):
+          ego_motion = False
+        else:
+          ego_motion = True
+
+        # opening the scan(and label) file
+        self.scan.open_scan(self.scan_files[seq][frame], self.label_files[seq][frame], pose0, curr_pose, ego_motion=ego_motion)
+        image = np.array(self.scan.loadImage(self.image_files[seq][frame]))
+        pointcloud=np.hstack((self.scan.point,np.expand_dims(self.scan.remission,1)))
+
+        if self.train == 'train':
+          sem_label = self.map(np.copy(self.scan.label), self.learning_map)
+          sem_label =np.squeeze(sem_label, axis=1)
+
+        proj_matrix=self.proj_matrix[seq]
+        mapped_pointcloud, keep_mask = self.scan.mapLidar2Camera(proj_matrix,pointcloud[:, :3], image.shape[1], image.shape[0])
+        y_data = mapped_pointcloud[:, 1].astype(np.int32)
+        x_data = mapped_pointcloud[:, 0].astype(np.int32)
+        # combined = np.vstack((y_data,x_data))
+        # ind= np.unique(combined,axis=1,return_index=True,return_counts=True,return_inverse=False)
+        # counts=ind[2]
+        # counts =counts[counts>1]
+        image = image.astype(np.float32) / 255.0
+        # compute image view pointcloud feature
+        depth = np.linalg.norm(pointcloud[:, :3], 2, axis=1)
+        keep_poincloud = pointcloud[keep_mask]
+        proj_xyzi = np.zeros((image.shape[0], image.shape[1], keep_poincloud.shape[1]), dtype=np.float32)
+        proj_xyzi[x_data, y_data] = keep_poincloud
+        proj_depth = np.zeros((image.shape[0], image.shape[1]), dtype=np.float32)
+        proj_depth[x_data, y_data] = depth[keep_mask]
+
+        if self.train == 'train':
+          proj_label = np.zeros((image.shape[0], image.shape[1]), dtype=np.int32)
+          proj_label[x_data, y_data] = sem_label[keep_mask]
+
+        proj_mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.int32)
+        proj_mask[x_data, y_data] = 1
+
+        # convert data to tensor
+        image_tensor = torch.from_numpy(image)
+        proj_depth_tensor = torch.from_numpy(proj_depth)
+        proj_xyzi_tensor = torch.from_numpy(proj_xyzi)
+        proj_label_tensor = torch.from_numpy(proj_label)
+        proj_mask_tensor = torch.from_numpy(proj_mask)
+
+        temporal_proj_tensor[timeframe] = torch.cat((proj_depth_tensor.unsqueeze(0),proj_xyzi_tensor.permute(2, 0, 1),image_tensor.permute(2, 0, 1),
+                                  proj_mask_tensor.float().unsqueeze(0),proj_label_tensor.float().unsqueeze(0)), dim=0)
+
+        temporal_proj_label[timeframe] = torch.from_numpy(proj_label)
 
 
-
-
-    # return {"data": concat_time_frames,  # pixel features - size: BxTxRx5xHxW
-    #         "single_data": single_proj_range,  # pixel features -size: Bx5xHxW
-    #         "gt_single_pixel": proj_single_label,  # single pixel label - size: BxHxW
-    #         "gt_multi_pixel": proj_multi_label,  # single pixel label - size: Bx5xHxW
-    #         # "unproj_range": unproj_range, # range information of points - size: Bx100,000x1
-    #         # "p_x": p_x,"p_y": p_y, # point location in image - size: Bx100,000
-    #         # "points":curr_points, # point features - size : size: Bx100,000x3
-    #         # "proj_range":proj_range_total, # point->pixel - size: BxHxW
-    #         # "groundtruth_points": curr_lab # original gt of points - size : Bx100,000x1
-    #         }
+    return {
+      "temporal_proj_tensor":temporal_proj_tensor,
+      "temporal_proj_label":temporal_proj_label,
+      }
 
 
