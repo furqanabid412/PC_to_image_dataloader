@@ -352,7 +352,7 @@ class SemanticKitti(Dataset):
           ego_motion = True
 
         # opening the scan(and label) file
-        self.scan.open_scan(self.scan_files[seq][frame], self.label_files[seq][frame], pose0, curr_pose, ego_motion=ego_motion)
+        self.scan.open_scan(self.scan_files[seq][curr_frame], self.label_files[seq][curr_frame], pose0, curr_pose, ego_motion=ego_motion)
         image = np.array(self.scan.loadImage(self.image_files[seq][frame]))
         pointcloud=np.hstack((self.scan.point,np.expand_dims(self.scan.remission,1)))
 
